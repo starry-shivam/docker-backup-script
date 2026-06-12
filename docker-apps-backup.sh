@@ -362,8 +362,8 @@ restart_stacks() {
 # ── Phase functions ───────────────────────────────────────────────────────── #
 
 acquire_lock() {
-    exec 200>"$LOCK_FILE"
-    if ! flock -n 200; then
+    exec {LOCK_FD}>"$LOCK_FILE"
+    if ! flock -n "$LOCK_FD"; then
         echo "Another backup instance is already running." >&2
         exit 1
     fi
@@ -461,11 +461,11 @@ perform_backup() {
     log "Archive created successfully"
 
     log "Generating checksum: $CHECKSUM_FILE"
-    sha256sum "$BACKUP_FILE" > "$CHECKSUM_FILE" \
+    (cd "$LOCAL_DEST" && sha256sum "$BACKUP_NAME" > "$CHECKSUM_NAME") \
         || fail "Failed to generate SHA256 checksum"
 
     log "Verifying checksum"
-    sha256sum --check "$CHECKSUM_FILE" \
+    (cd "$LOCAL_DEST" && sha256sum --check "$CHECKSUM_NAME") \
         || fail "Integrity check failed! Backup corrupted."
     log "Checksum verification passed"
 

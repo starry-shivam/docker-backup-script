@@ -16,17 +16,15 @@ Backup script for Docker app folders with integrity checks and remote rotation.
 
 ## Features
 
-- Backs up Docker app folders to Google Drive with `rclone`.
-- Uses a local staging directory for backup creation and verification.
-- Compresses archives with `zstd`.
-- Checks that the rclone destination is reachable before backup starts.
-- Stops stateful stacks before backup and starts them again after.
-- Verifies the uploaded backup and checksum on the remote.
-- Rotates old remote backups and keeps only the latest copies.
-- Uses a lock file to prevent concurrent runs.
-- Cleans up staging files after a successful run.
-- Restores containers and sends a failure alert if something goes wrong.
-- Sends Telegram alerts when credentials are configured.
+- **Smart Container Management:** Automatically detects stateful Docker stacks and safely stops only them, leaving your stateless apps running without interruption.
+- **Auto-Recovery:** Remembers which containers were active and automatically restarts them, even if the backup fails or is manually aborted.
+- **Custom Exclusions:** Allows you to explicitly blacklist specific projects from being auto-started or managed by the script.
+- **High-Speed Compression:** Uses multithreaded Zstandard (`zstd`) for blazing-fast, highly compressed archives that utilize all available CPU cores.
+- **Bulletproof Integrity:** Generates portable SHA256 checksums and uses `rclone check` to guarantee your cloud backup exactly matches the local data.
+- **Cloud-Optimized Uploads:** Leverages `rclone` with tunable buffer and chunk sizes for fast, reliable transfers to any supported remote storage.
+- **Automated Remote Retention:** Automatically prunes the oldest archives and checksums from the cloud to strictly enforce your maximum backup limit.
+- **Concurrency Guards:** Uses strict error handling (`set -uo pipefail`) and atomic lockfiles to prevent overlapping backups or silent failures.
+- **Rich Telegram Alerts:** Sends real-time notifications for backup milestones, final size/integrity summaries, and detailed error reports.
 
 ## Requirements
 
