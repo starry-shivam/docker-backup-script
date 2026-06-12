@@ -1,0 +1,494 @@
+#!/bin/bash
+#
+# Copyright (C) 2024-Present Stɑrry Shivɑm <touka.krs@gmail.com>
+# All Rights Reserved.
+#
+# Unauthorized copying of this file, via any medium is strictly prohibited.
+# Proprietary and confidential.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# ======================= CONFIG START ======================= #
+SOURCE="/home/starry/ssd/docker-apps"
+# Local staging directory for backup creation and verification
+# NOTE: Do NOT use /tmp if it is tmpfs (RAM-backed) and backups may be large.
+LOCAL_DEST="/tmp/.backup-staging"
+
+# rclone remote destination
+RCLONE_DEST="starrygd:backups"
+# Optional explicit rclone config path (useful for systemd services)
+RCLONE_CONFIG="${RCLONE_CONFIG:-}"
+# rclone upload tuning
+RCLONE_STATS_INTERVAL="${RCLONE_STATS_INTERVAL:-10s}"
+RCLONE_DRIVE_CHUNK_SIZE="${RCLONE_DRIVE_CHUNK_SIZE:-64M}"
+RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-32M}"
+
+# Telegram bot credentials for notifications
+BOT_TOKEN="${BOT_TOKEN}"
+CHAT_ID="${CHAT_ID}"
+
+# Timestamp for backup filenames (ISO 8601, filesystem-safe)
+TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
+# Human-readable timestamp for logs and notifications
+TIMESTAMP_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
+
+# Number of backups to keep on remote
+MAX_KEEP=4
+
+# zstd compression level
+# Valid values:
+#   1-19  = normal compression levels
+#   20-22 = ultra compression levels (slower, more RAM usage)
+#
+# Recommended:
+#   3  = fastest (roughly default zstd behavior)
+#   9  = good balance
+#   19 = maximum practical compression
+#   22 = absolute maximum compression
+ZSTD_LEVEL=9
+
+# Graceful stop timeout in seconds for stateful stacks
+STOP_TIMEOUT=60
+
+# List of project directory names that should NEVER be auto-started
+# Example: NO_AUTOSTART_PROJECTS=("oldapp" "test-stack")
+NO_AUTOSTART_PROJECTS=("tdl-tg")
+# ======================== CONFIG END ======================== #
+
+
+
+set -o pipefail
+
+LOCK_FILE="/tmp/docker-apps-backup.lock"
+exec 200>"$LOCK_FILE"
+
+if ! flock -n 200; then
+    echo "Another backup instance is already running." >&2
+    exit 1
+fi
+
+# Detect docker compose command
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+else
+    echo "ERROR: Could not detect a compose command. Install 'docker compose' or 'docker-compose'." >&2
+    exit 1
+fi
+
+# Validate zstd compression level
+if ! [[ "$ZSTD_LEVEL" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: ZSTD_LEVEL must be an integer between 1 and 22." >&2
+    exit 1
+fi
+
+if (( ZSTD_LEVEL < 1 || ZSTD_LEVEL > 22 )); then
+    echo "ERROR: ZSTD_LEVEL must be between 1 and 22." >&2
+    exit 1
+fi
+
+# Validate graceful stop timeout
+if ! [[ "$STOP_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: STOP_TIMEOUT must be a non-negative integer (seconds)." >&2
+    exit 1
+fi
+
+# Build zstd command
+if (( ZSTD_LEVEL <= 19 )); then
+    ZSTD_CMD="zstd -${ZSTD_LEVEL} -T0"
+else
+    ZSTD_CMD="zstd --ultra -${ZSTD_LEVEL} -T0"
+fi
+
+# Output filenames
+BACKUP_FILE="$LOCAL_DEST/docker-apps-$TIMESTAMP.tar.zst"
+CHECKSUM_FILE="$BACKUP_FILE.sha256"
+BACKUP_NAME="$(basename "$BACKUP_FILE")"
+CHECKSUM_NAME="$(basename "$CHECKSUM_FILE")"
+
+# Track which compose files we actually stopped & should restart
+PROJECTS_TO_RESTART=()
+
+# Helper: check if a project (directory name) is in NO_AUTOSTART_PROJECTS
+is_no_autostart_project() {
+    local project="$1"
+    for p in "${NO_AUTOSTART_PROJECTS[@]}"; do
+        [[ "$p" == "$project" ]] && return 0
+    done
+    return 1
+}
+
+# Detect whether a project likely contains mutable/persistent state
+project_needs_shutdown() {
+    local project_dir="$1"
+
+    # Common persistent data directories
+    local state_dirs=(
+        "data"
+        "config"
+        "db"
+        "database"
+        "postgres"
+        "mysql"
+        "redis"
+    )
+
+    for d in "${state_dirs[@]}"; do
+        if [[ -d "$project_dir/$d" ]]; then
+            return 0
+        fi
+    done
+
+    # Detect common database/WAL/state files
+    if find "$project_dir" -maxdepth 3 -type f \( \
+        -iname "*.db" -o \
+        -iname "*.sqlite" -o \
+        -iname "*.sqlite3" -o \
+        -iname "*.db-wal" -o \
+        -iname "*.db-shm" -o \
+        -iname "*.wal" -o \
+        -iname "*.mdb" \
+    \) -print -quit | grep -q .; then
+        return 0
+    fi
+
+    # No persistent state indicators found
+    return 1
+}
+
+# Best-effort restart of previously running projects (used on failure too)
+restart_containers_safely() {
+    for compose_file in "${PROJECTS_TO_RESTART[@]}"; do
+        # Ignore errors here – this is best-effort
+        $COMPOSE_CMD -f "$compose_file" up -d >/dev/null 2>&1 || true
+    done
+}
+
+# Telegram helper (no-op when credentials are not set)
+send_telegram() {
+    local msg="$1"
+
+    [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]] && return 0
+
+    curl -s \
+        -X POST \
+        "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+        -d chat_id="$CHAT_ID" \
+        -d text="$msg" \
+        >/dev/null 2>&1 || true
+}
+
+# Timestamped log helper for journal visibility.
+log() {
+    echo "[$(date '+%F %T')] $*"
+}
+
+# Failure handling
+fail() {
+    # Try to bring back anything we stopped
+    restart_containers_safely
+
+    local MESSAGE="❌ Docker Apps Backup FAILED
+📅 $TIMESTAMP_HUMAN
+Error: $1"
+
+    send_telegram "$MESSAGE"
+
+    exit 1
+}
+
+# Run rclone, optionally with an explicit config file.
+rclone_cmd() {
+    if [[ -n "$RCLONE_CONFIG" ]]; then
+        rclone --config "$RCLONE_CONFIG" "$@"
+    else
+        rclone "$@"
+    fi
+}
+
+# rclone upload command with progress/statistics and Google Drive tuning.
+rclone_upload_cmd() {
+    if [[ -n "$RCLONE_CONFIG" ]]; then
+        rclone --config "$RCLONE_CONFIG" \
+            --stats "$RCLONE_STATS_INTERVAL" \
+            --stats-one-line \
+            --progress \
+            --buffer-size "$RCLONE_BUFFER_SIZE" \
+            --drive-chunk-size "$RCLONE_DRIVE_CHUNK_SIZE" \
+            "$@"
+    else
+        rclone \
+            --stats "$RCLONE_STATS_INTERVAL" \
+            --stats-one-line \
+            --progress \
+            --buffer-size "$RCLONE_BUFFER_SIZE" \
+            --drive-chunk-size "$RCLONE_DRIVE_CHUNK_SIZE" \
+            "$@"
+    fi
+}
+
+# Validate rclone destination access before doing disruptive work.
+check_rclone_destination() {
+    command -v rclone >/dev/null 2>&1 \
+        || fail "rclone command not found"
+
+    log "Checking rclone destination access"
+    rclone_cmd lsf "$RCLONE_DEST" --max-depth 1 >/dev/null 2>&1 \
+        || fail "Cannot access rclone destination '$RCLONE_DEST'. Set RCLONE_CONFIG if running under systemd."
+}
+
+# --- Rotation helpers ---
+pre_rotate_to_max_minus_one() {
+    # Ensure there are at most MAX_KEEP-1 archives BEFORE creating the new one
+    log "Pre-rotating remote backups to keep at most $((MAX_KEEP - 1)) archives before upload"
+    # --format tp → "<mtime>;<filename>"; sort ascending = oldest first
+    mapfile -t lines < <(
+        rclone_cmd lsf "$RCLONE_DEST" --files-only --format tp 2>/dev/null \
+            | grep ';docker-apps-.*\.tar\.zst$' \
+            | sort || true
+    )
+    local count=${#lines[@]}
+    log "Found $count remote archives before pre-rotation"
+    if (( count >= MAX_KEEP )); then
+        local n=$(( count - (MAX_KEEP - 1) ))
+        for line in "${lines[@]:0:$n}"; do
+            local f="${line#*;}"
+            log "Deleting remote archive during pre-rotation: $f"
+            rclone_cmd deletefile "$RCLONE_DEST/$f" >/dev/null 2>&1 || true
+        done
+    fi
+
+    # Do the same for checksum files
+    mapfile -t lines < <(
+        rclone_cmd lsf "$RCLONE_DEST" --files-only --format tp 2>/dev/null \
+            | grep ';docker-apps-.*\.tar\.zst\.sha256$' \
+            | sort || true
+    )
+    count=${#lines[@]}
+    log "Found $count remote checksum files before pre-rotation"
+    if (( count >= MAX_KEEP )); then
+        local n=$(( count - (MAX_KEEP - 1) ))
+        for line in "${lines[@]:0:$n}"; do
+            local f="${line#*;}"
+            log "Deleting remote checksum during pre-rotation: $f"
+            rclone_cmd deletefile "$RCLONE_DEST/$f" >/dev/null 2>&1 || true
+        done
+    fi
+}
+
+post_rotate_to_max() {
+    # After successful upload, ensure there are at most MAX_KEEP archives
+    log "Post-rotating remote backups to keep at most $MAX_KEEP archives after upload"
+    mapfile -t lines < <(
+        rclone_cmd lsf "$RCLONE_DEST" --files-only --format tp 2>/dev/null \
+            | grep ';docker-apps-.*\.tar\.zst$' \
+            | sort || true
+    )
+    local count=${#lines[@]}
+    log "Found $count remote archives before post-rotation"
+    if (( count > MAX_KEEP )); then
+        local n=$(( count - MAX_KEEP ))
+        for line in "${lines[@]:0:$n}"; do
+            local f="${line#*;}"
+            log "Deleting remote archive during post-rotation: $f"
+            rclone_cmd deletefile "$RCLONE_DEST/$f" >/dev/null 2>&1 || true
+        done
+    fi
+
+    # And for checksum files
+    mapfile -t lines < <(
+        rclone_cmd lsf "$RCLONE_DEST" --files-only --format tp 2>/dev/null \
+            | grep ';docker-apps-.*\.tar\.zst\.sha256$' \
+            | sort || true
+    )
+    count=${#lines[@]}
+    log "Found $count remote checksum files before post-rotation"
+    if (( count > MAX_KEEP )); then
+        local n=$(( count - MAX_KEEP ))
+        for line in "${lines[@]:0:$n}"; do
+            local f="${line#*;}"
+            log "Deleting remote checksum during post-rotation: $f"
+            rclone_cmd deletefile "$RCLONE_DEST/$f" >/dev/null 2>&1 || true
+        done
+    fi
+}
+
+# --- Stop only stateful running compose stacks ---
+stop_running_stacks() {
+    # Find docker-compose.yml files under SOURCE (one level deep)
+    log "Scanning for compose files under $SOURCE"
+    mapfile -t compose_files < <(
+        find "$SOURCE" -maxdepth 2 -type f \( \
+            -name 'docker-compose.yml' -o \
+            -name 'docker-compose.yaml' -o \
+            -name 'compose.yml' -o \
+            -name 'compose.yaml' \
+        \) | sort
+    )
+    log "Found ${#compose_files[@]} compose files"
+
+    for compose_file in "${compose_files[@]}"; do
+        project_dir="$(dirname "$compose_file")"
+        project_name="$(basename "$project_dir")"
+
+        log "Inspecting project: $project_name"
+
+        # Skip projects explicitly marked as "do not auto-start/manage"
+        if is_no_autostart_project "$project_name"; then
+            log "Skipping project marked no-autostart: $project_name"
+            continue
+        fi
+
+        # NEW: Skip stateless/static projects
+        if ! project_needs_shutdown "$project_dir"; then
+            log "Skipping shutdown for stateless project: $project_name"
+            continue
+        fi
+
+        # Check if anything is running in this project
+        running_services="$($COMPOSE_CMD -f "$compose_file" ps --status running --services 2>/dev/null || true)"
+
+        if [[ -n "$running_services" ]]; then
+            log "Stopping stateful project: $project_name"
+
+            # Stop containers for a clean, consistent backup
+            log "Stopping compose stack with timeout ${STOP_TIMEOUT}s: $compose_file"
+            $COMPOSE_CMD -f "$compose_file" stop -t "$STOP_TIMEOUT" \
+                || fail "Failed to stop containers for project '$project_name'"
+
+            # Remember to start this project again later
+            PROJECTS_TO_RESTART+=("$compose_file")
+            log "Queued for restart: $project_name"
+        else
+            log "No running services detected for: $project_name"
+        fi
+    done
+}
+
+# --- Restart previously running stacks ---
+restart_stacks() {
+    log "Restarting ${#PROJECTS_TO_RESTART[@]} previously running stacks"
+    for compose_file in "${PROJECTS_TO_RESTART[@]}"; do
+        project_dir="$(dirname "$compose_file")"
+        project_name="$(basename "$project_dir")"
+
+        # If user added it to NO_AUTOSTART_PROJECTS after the script ran, respect that
+        if is_no_autostart_project "$project_name"; then
+            log "Skipping restart due to no-autostart rule: $project_name"
+            continue
+        fi
+
+        log "Starting compose stack: $project_name"
+        $COMPOSE_CMD -f "$compose_file" up -d \
+            || fail "Backup succeeded, but failed to restart project '$project_name'"
+    done
+}
+
+# Create local staging directory if missing
+log "Creating local staging directory: $LOCAL_DEST"
+mkdir -p "$LOCAL_DEST" \
+    || fail "Failed to create local staging directory '$LOCAL_DEST'"
+
+# Validate rclone destination access before stopping any containers
+check_rclone_destination
+
+# Send Telegram start message
+START_MESSAGE="🐋 Docker Apps Backup Started
+📅 $TIMESTAMP_HUMAN"
+send_telegram "$START_MESSAGE"
+log "Sent Telegram start notification"
+
+# --- Pre-rotate so the total never exceeds MAX_KEEP ---
+pre_rotate_to_max_minus_one
+
+# --- Stop Docker apps before backup ---
+log "Stopping stateful Docker apps"
+stop_running_stacks
+
+if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
+    send_telegram "🛑 Containers stopped for backup
+📅 $TIMESTAMP_HUMAN"
+    log "Sent Telegram containers-stopped notification"
+fi
+
+# --- Create archive using zstd compression ---
+log "Creating archive: $BACKUP_FILE"
+tar -I "$ZSTD_CMD" -cf "$BACKUP_FILE" \
+    -C "$(dirname "$SOURCE")" "$(basename "$SOURCE")" \
+    || fail "tar/zstd compression error"
+log "Archive created successfully"
+
+# Calculate checksum
+log "Generating checksum: $CHECKSUM_FILE"
+sha256sum "$BACKUP_FILE" > "$CHECKSUM_FILE" \
+    || fail "Failed to generate SHA256 checksum"
+
+# Verify checksum
+log "Verifying checksum"
+sha256sum --check "$CHECKSUM_FILE" \
+    || fail "Integrity check failed! Backup corrupted."
+log "Checksum verification passed"
+
+# --- Restart stacks that were running before backup ---
+log "Restarting stopped Docker apps"
+restart_stacks
+
+if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
+    send_telegram "✅ Containers back up after backup
+📅 $TIMESTAMP_HUMAN"
+    log "Sent Telegram containers-restarted notification"
+fi
+
+# Clear restart list since stacks are already running.
+# Prevent fail() from attempting duplicate restarts during upload/cleanup failures.
+PROJECTS_TO_RESTART=()
+log "Cleared restart queue after successful local restart"
+
+# Calculate file size
+SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+log "Local backup size: $SIZE"
+
+UPLOAD_START_TS=$(date +%s)
+log "Uploading archive to rclone remote: $RCLONE_DEST/$BACKUP_NAME"
+
+# Upload archive and checksum via rclone
+rclone_upload_cmd copyto "$BACKUP_FILE" \
+    "$RCLONE_DEST/$BACKUP_NAME" \
+    || fail "Failed to upload backup archive to remote"
+
+log "Uploading checksum to rclone remote: $RCLONE_DEST/$CHECKSUM_NAME"
+rclone_upload_cmd copyto "$CHECKSUM_FILE" \
+    "$RCLONE_DEST/$CHECKSUM_NAME" \
+    || fail "Failed to upload checksum file to remote"
+
+UPLOAD_END_TS=$(date +%s)
+UPLOAD_SECONDS=$((UPLOAD_END_TS - UPLOAD_START_TS))
+log "Upload completed in ${UPLOAD_SECONDS}s"
+
+# Final rotation to ensure EXACTLY MAX_KEEP remain (handles parallel runs)
+log "Running remote retention cleanup"
+post_rotate_to_max
+
+# Cleanup local staging files after successful upload
+log "Cleaning up local staging files"
+rm -f "$BACKUP_FILE" "$CHECKSUM_FILE" \
+    || fail "Uploaded successfully, but failed to clean up local staging files"
+log "Local cleanup complete"
+
+# Send Telegram success message
+MESSAGE="✅ Docker Apps Backup Completed (zstd)
+📅 $TIMESTAMP_HUMAN
+📦 Size: $SIZE
+🔒 Integrity: Verified OK
+☁️ Upload: rclone copy OK
+🗂 Retention: Keeping last $MAX_KEEP backups on remote"
+
+send_telegram "$MESSAGE"
+log "Sent Telegram success notification"
