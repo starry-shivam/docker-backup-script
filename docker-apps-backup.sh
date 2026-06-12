@@ -15,28 +15,28 @@
 # SOFTWARE.
 #
 # ======================= CONFIG START ======================= #
-readonly SOURCE="/home/starry/ssd/docker-apps"
+readonly SOURCE="${SOURCE:?SOURCE must be set}"
 # Local staging directory for backup creation and verification
 # NOTE: Do NOT use /tmp if it is tmpfs (RAM-backed) and backups may be large.
-readonly LOCAL_DEST="/tmp/.backup-staging"
+readonly LOCAL_DEST="${LOCAL_DEST:-/tmp/.backup-staging}"
 
 # rclone remote destination
-RCLONE_DEST="starrygd:backups"
+readonly RCLONE_DEST="${RCLONE_DEST:?RCLONE_DEST must be set}"
 # Optional explicit rclone config path (useful for systemd services)
-RCLONE_CONFIG="${RCLONE_CONFIG:-}"
+readonly RCLONE_CONFIG="${RCLONE_CONFIG:-}"
 # rclone upload tuning
-RCLONE_STATS_INTERVAL="${RCLONE_STATS_INTERVAL:-10s}"
-RCLONE_DRIVE_CHUNK_SIZE="${RCLONE_DRIVE_CHUNK_SIZE:-64M}"
-RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-32M}"
+readonly RCLONE_STATS_INTERVAL="${RCLONE_STATS_INTERVAL:-10s}"
+readonly RCLONE_DRIVE_CHUNK_SIZE="${RCLONE_DRIVE_CHUNK_SIZE:-64M}"
+readonly RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-32M}"
 
 # Telegram bot credentials for notifications
-BOT_TOKEN="${BOT_TOKEN:-}"
-CHAT_ID="${CHAT_ID:-}"
+readonly BOT_TOKEN="${BOT_TOKEN:-}"
+readonly CHAT_ID="${CHAT_ID:-}"
 
 # Timestamp for backup filenames (ISO 8601, filesystem-safe)
-TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
+readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
 # Human-readable timestamp for logs and notifications
-TIMESTAMP_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
+readonly TIMESTAMP_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Number of backups to keep on remote
 readonly MAX_KEEP=4
@@ -58,11 +58,11 @@ readonly STOP_TIMEOUT=60
 
 # List of project directory names that should NEVER be auto-started
 # Example: NO_AUTOSTART_PROJECTS=("oldapp" "test-stack")
-NO_AUTOSTART_PROJECTS=("tdl-tg")
+readonly NO_AUTOSTART_PROJECTS=("tdl-tg")
 
 # Directory names that indicate a project contains mutable/persistent state.
 # Projects containing any of these subdirectories will be stopped before backup.
-STATE_DIRS=(
+readonly STATE_DIRS=(
     "data"
     "config"
     "db"
