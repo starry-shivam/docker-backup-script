@@ -39,7 +39,7 @@ readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
 readonly TIMESTAMP_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Number of backups to keep on remote
-readonly MAX_KEEP=4
+readonly MAX_KEEP="${MAX_KEEP:-4}"
 
 # zstd compression level
 # Valid values:
@@ -51,14 +51,19 @@ readonly MAX_KEEP=4
 #   9  = good balance
 #   19 = maximum practical compression
 #   22 = absolute maximum compression
-readonly ZSTD_LEVEL=9
+readonly ZSTD_LEVEL="${ZSTD_LEVEL:-9}"
 
 # Graceful stop timeout in seconds for stateful stacks
-readonly STOP_TIMEOUT=60
+readonly STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 
 # List of project directory names that should NEVER be auto-started
-# Example: NO_AUTOSTART_PROJECTS=("oldapp" "test-stack")
-readonly NO_AUTOSTART_PROJECTS=("tdl-tg")
+# Example env value: NO_AUTOSTART_PROJECTS=tdl-tg,oldapp,test-stack
+readonly NO_AUTOSTART_PROJECTS_RAW="${NO_AUTOSTART_PROJECTS:-}"
+NO_AUTOSTART_PROJECTS=()
+if [[ -n "$NO_AUTOSTART_PROJECTS_RAW" ]]; then
+    IFS=',' read -r -a NO_AUTOSTART_PROJECTS <<< "$NO_AUTOSTART_PROJECTS_RAW"
+fi
+readonly NO_AUTOSTART_PROJECTS
 
 # Directory names that indicate a project contains mutable/persistent state.
 # Projects containing any of these subdirectories will be stopped before backup.
@@ -397,6 +402,17 @@ init() {
 }
 
 preflight_checks() {
+    # Validate retention count
+    if ! [[ "$MAX_KEEP" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: MAX_KEEP must be a positive integer." >&2
+        exit 1
+    fi
+
+    if (( MAX_KEEP < 1 )); then
+        echo "ERROR: MAX_KEEP must be at least 1." >&2
+        exit 1
+    fi
+
     # Validate zstd compression level
     if ! [[ "$ZSTD_LEVEL" =~ ^[0-9]+$ ]]; then
         echo "ERROR: ZSTD_LEVEL must be an integer between 1 and 22." >&2

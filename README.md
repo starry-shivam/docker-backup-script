@@ -38,9 +38,11 @@ Backup script for Docker app folders with integrity checks and remote rotation.
 
 ## Configuration
 
-The script is designed to be configured through variables in an environment file and the paths you use for your Docker app folders and rclone remote.
+Use an environment file to set the required source path and rclone destination, plus any optional tuning or notification values.
 
-Use the systemd environment file to store runtime secrets and service-specific values.
+Example file: [docker-backup-example.env](docker-backup-example.env)
+
+Copy it to your real environment file and edit the values for your setup.
 
 ## Systemd Service
 
