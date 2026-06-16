@@ -32,6 +32,8 @@ readonly RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-32M}"
 # Telegram bot credentials for notifications
 readonly BOT_TOKEN="${BOT_TOKEN:-}"
 readonly CHAT_ID="${CHAT_ID:-}"
+# Optional HTTPS proxy for Telegram API requests (e.g. https://user:pass@proxy.example.com:8443)
+readonly TELEGRAM_PROXY="${TELEGRAM_PROXY:-}"
 
 # Timestamp for backup filenames (ISO 8601, filesystem-safe)
 readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
@@ -143,11 +145,16 @@ send_telegram() {
 
     [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]] && return 0
 
+    # Support optional proxy for Telegram API requests
+    local proxy_args=()
+    [[ -n "${TELEGRAM_PROXY:-}" ]] && proxy_args=(--proxy "$TELEGRAM_PROXY")
+
     curl -s \
         --connect-timeout 10 \
         --max-time 10 \
         --retry 3 \
         --retry-all-errors \
+        "${proxy_args[@]}" \
         -X POST \
         "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
         -d chat_id="$CHAT_ID" \
