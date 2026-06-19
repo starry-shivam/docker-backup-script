@@ -114,7 +114,7 @@ project_needs_shutdown() {
 
     # Detect common database/WAL/state files
     if find "$project_dir" -maxdepth 3 -type f \( \
-        -iname "*.db" -o \f
+        -iname "*.db" -o \
         -iname "*.sqlite" -o \
         -iname "*.sqlite3" -o \
         -iname "*.db-wal" -o \
