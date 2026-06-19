@@ -37,8 +37,6 @@ readonly TELEGRAM_PROXY="${TELEGRAM_PROXY:-}"
 
 # Timestamp for backup filenames (ISO 8601, filesystem-safe)
 readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
-# Human-readable timestamp for logs and notifications
-readonly TIMESTAMP_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Number of backups to keep on remote
 readonly MAX_KEEP="${MAX_KEEP:-4}"
@@ -59,7 +57,7 @@ readonly ZSTD_LEVEL="${ZSTD_LEVEL:-9}"
 readonly STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 
 # List of project directory names that should NEVER be auto-started
-# Example env value: NO_AUTOSTART_PROJECTS=tdl-tg,oldapp,test-stack
+# Example env value: NO_AUTOSTART_PROJECTS=oldapp,test-stack
 readonly NO_AUTOSTART_PROJECTS_RAW="${NO_AUTOSTART_PROJECTS:-}"
 NO_AUTOSTART_PROJECTS=()
 if [[ -n "$NO_AUTOSTART_PROJECTS_RAW" ]]; then
@@ -116,7 +114,7 @@ project_needs_shutdown() {
 
     # Detect common database/WAL/state files
     if find "$project_dir" -maxdepth 3 -type f \( \
-        -iname "*.db" -o \
+        -iname "*.db" -o \f
         -iname "*.sqlite" -o \
         -iname "*.sqlite3" -o \
         -iname "*.db-wal" -o \
@@ -180,7 +178,7 @@ fail() {
     restart_containers_safely
 
     local MESSAGE="❌ Docker Apps Backup FAILED
-📅 $TIMESTAMP_HUMAN
+📅 $(date +"%Y-%m-%d %H:%M:%S")
 Error: $1"
 
     send_telegram "$MESSAGE"
@@ -442,7 +440,7 @@ preflight_checks() {
 
 send_start_notification() {
     local msg="🐋 Docker Apps Backup Started
-📅 $TIMESTAMP_HUMAN"
+📅 $(date +"%Y-%m-%d %H:%M:%S")"
     send_telegram "$msg"
     log "Sent Telegram start notification"
 }
@@ -456,7 +454,7 @@ perform_backup() {
 
     if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
         send_telegram "🛑 Containers stopped for backup
-📅 $TIMESTAMP_HUMAN"
+📅 $(date +"%Y-%m-%d %H:%M:%S")"
         log "Sent Telegram containers-stopped notification"
     fi
 
@@ -481,7 +479,7 @@ perform_backup() {
 
     if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
         send_telegram "✅ Containers back up after backup
-📅 $TIMESTAMP_HUMAN"
+📅 $(date +"%Y-%m-%d %H:%M:%S")"
         log "Sent Telegram containers-restarted notification"
     fi
 
@@ -532,7 +530,7 @@ send_success_notification() {
     trap - INT TERM
 
     local msg="✅ Docker Apps Backup Completed (zstd)
-📅 $TIMESTAMP_HUMAN
+📅 $(date +"%Y-%m-%d %H:%M:%S")
 📦 Size: $SIZE
 🔒 Integrity: Verified OK
 ☁️ Upload: rclone copy + check OK
