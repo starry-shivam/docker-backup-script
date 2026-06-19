@@ -1,6 +1,6 @@
 # Docker Apps Backup
 
-Backup script for Docker app folders with integrity checks and remote rotation.
+Backup and restore scripts for Docker app folders with integrity checks, remote rotation, and restore validation.
 
 ## Directory structure example:
 
@@ -26,7 +26,21 @@ Backup script for Docker app folders with integrity checks and remote rotation.
 - **Concurrency Guards:** Uses strict error handling (`set -uo pipefail`) and atomic lockfiles to prevent overlapping backups or silent failures.
 - **Rich Telegram Alerts:** Sends real-time notifications for backup milestones, final size/integrity summaries, and detailed error reports.
 
+## Restore Features
+
+- **Two Restore Modes:** Restore the latest archive from an `rclone` remote or restore directly from a local `.tar.zst` archive.
+- **Optional Local Checksum:** Local restores can verify a provided `.sha256` file and will auto-discover `<archive>.sha256` when it exists next to the archive.
+- **Remote Checksum Enforcement:** Remote restores require the matching checksum file to exist before the restore proceeds.
+- **Archive Inspection:** Shows archive size, entry count, and archive root information to help confirm you are restoring the expected backup.
+- **Safe Destination Checks:** Refuses dangerous restore paths, creates the destination when missing, and warns before writing into a non-empty directory.
+- **Flexible Extraction Layout:** Preserves the archive root by default and supports `--flatten` when you want the archive contents extracted directly into the target path.
+- **Integrity Verification:** Verifies checksum data when available and always tests the archive structure before extraction.
+- **Compose Validation:** After restore, scans restored app folders for compose files and runs `docker compose config` or `docker-compose config` when available, without pulling or starting containers.
+- **Restore Summary:** Prints detected compose projects after extraction so you can quickly confirm which app stacks were restored.
+
 ## Requirements
+
+### Backup
 
 - `bash`
 - `docker compose`
@@ -34,15 +48,32 @@ Backup script for Docker app folders with integrity checks and remote rotation.
 - `zstd`
 - Optional: Telegram bot token and chat ID for notifications
 
-## Configuration
+### Restore
+
+- `bash`
+- `tar`
+- `zstd`
+- `sha256sum`
+- `rclone` for remote restore mode only
+- Optional: `docker compose` or `docker-compose` for post-restore compose validation
+
+## Backup Setup
+
+### Configuration
 
 Use an environment file to set the required source path and rclone destination, plus any optional tuning or notification values.
 
-Example file: [docker-backup-example.env](docker-backup-example.env)
+Example file: [conf-example.env](conf-example.env)
 
 Copy it to your real environment file and edit the values for your setup.
 
-## Systemd Service
+### Manual backup run
+
+```bash
+./docker-apps-backup.sh
+```
+
+### Systemd Service
 
 ```ini
 [Unit]
@@ -54,7 +85,7 @@ ExecStart=/usr/local/bin/docker-apps-backup.sh
 EnvironmentFile=/home/starry/ssd/bots/docker-backup.env
 ```
 
-## Systemd Timer
+### Systemd Timer
 
 ```ini
 [Unit]
@@ -81,4 +112,57 @@ Check status with:
 ```bash
 systemctl status docker-apps-backup.timer
 systemctl status docker-apps-backup.service
+```
+
+## Restore Usage
+
+### Remote restore
+
+Restores the latest `docker-apps-*.tar.zst` archive from an `rclone` remote.
+
+```bash
+./docker-apps-restore.sh \
+	--remote gdrive:docker-backups \
+	--restore-path /home/starry/ssd
+```
+
+Optional:
+
+```bash
+./docker-apps-restore.sh \
+	--remote gdrive:docker-backups \
+	--restore-path /home/starry/ssd \
+	--rclone-config /path/to/rclone.conf
+```
+
+### Local restore
+
+Restores directly from a local archive file.
+
+```bash
+./docker-apps-restore.sh \
+	--archive /path/to/docker-apps-2024-01-01T120000.tar.zst \
+	--restore-path /home/starry/ssd
+```
+
+Optional checksum:
+
+```bash
+./docker-apps-restore.sh \
+	--archive /path/to/docker-apps-2024-01-01T120000.tar.zst \
+	--checksum /path/to/docker-apps-2024-01-01T120000.tar.zst.sha256 \
+	--restore-path /home/starry/ssd
+```
+
+### Flatten restore
+
+By default, extraction preserves the top-level archive directory, so restoring to `/home/starry/ssd` produces `/home/starry/ssd/docker-apps/...`.
+
+Use `--flatten` to extract the archive contents directly into the target path:
+
+```bash
+./docker-apps-restore.sh \
+	--archive /path/to/docker-apps-2024-01-01T120000.tar.zst \
+	--restore-path /home/starry/ssd/docker-apps \
+	--flatten
 ```
