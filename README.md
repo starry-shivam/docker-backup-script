@@ -42,7 +42,6 @@ Backup and restore scripts for Docker app folders with integrity checks, remote 
 
 ### Backup
 
-- `bash`
 - `docker compose`
 - `rclone`
 - `zstd`
@@ -50,10 +49,7 @@ Backup and restore scripts for Docker app folders with integrity checks, remote 
 
 ### Restore
 
-- `bash`
-- `tar`
 - `zstd`
-- `sha256sum`
 - `rclone` for remote restore mode only
 - Optional: `docker compose` or `docker-compose` for post-restore compose validation
 
