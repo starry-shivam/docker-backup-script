@@ -13,8 +13,9 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-#
-# ======================= CONFIG START ======================= #
+
+
+# ========================================= CONFIG START ========================================= #
 readonly SOURCE="${SOURCE:?SOURCE must be set}"
 # Local staging directory for backup creation and verification
 # NOTE: Do NOT use /tmp if it is tmpfs (RAM-backed) and backups may be large.
@@ -34,6 +35,8 @@ readonly BOT_TOKEN="${BOT_TOKEN:-}"
 readonly CHAT_ID="${CHAT_ID:-}"
 # Optional HTTPS proxy for Telegram API requests (e.g. https://user:pass@proxy.example.com:8443)
 readonly TELEGRAM_PROXY="${TELEGRAM_PROXY:-}"
+# Optional base URL for Telegram Bot API requests
+readonly TELEGRAM_API_BASE_URL="${TELEGRAM_API_BASE_URL:-https://api.telegram.org}"
 
 # Timestamp for backup filenames (ISO 8601, filesystem-safe)
 readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
@@ -76,8 +79,7 @@ readonly STATE_DIRS=(
     "mysql"
     "redis"
 )
-# ======================== CONFIG END ======================== #
-
+# ========================================= CONFIG START ========================================= #
 
 
 set -uo pipefail
@@ -154,7 +156,7 @@ send_telegram() {
         --retry-all-errors \
         "${proxy_args[@]}" \
         -X POST \
-        "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+        "${TELEGRAM_API_BASE_URL%/}/bot$BOT_TOKEN/sendMessage" \
         -d chat_id="$CHAT_ID" \
         --data-urlencode text="$msg" \
         >/dev/null 2>&1 || true
