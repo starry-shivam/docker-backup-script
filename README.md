@@ -85,10 +85,10 @@ EnvironmentFile=/home/starry/ssd/bots/docker-backup.env
 
 ```ini
 [Unit]
-Description=Run docker apps backup every 72h (3 days)
+Description=Run docker apps backup every odd day (~48h)
 
 [Timer]
-OnCalendar=*-*-1,4,7,10,13,16,19,22,25,28 02:00:00
+OnCalendar=*-*-1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31 02:00:00
 Persistent=true
 Unit=docker-apps-backup.service
 

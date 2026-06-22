@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync latest server backup from Google Drive
+
+[Service]
+Type=oneshot
+User=starry
+Group=starry
+ExecStart=/usr/local/bin/sync-server-backup.sh

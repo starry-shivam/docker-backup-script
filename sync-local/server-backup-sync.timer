@@ -1,0 +1,10 @@
+[Unit]
+Description=Run server backup sync
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
