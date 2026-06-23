@@ -7,8 +7,22 @@ DEST="$HOME/Documents/Important-Stuffs/server-bak"
 # Function to send desktop notification
 notify_desktop() {
     local message="$1"
-    if command -v notify-send &> /dev/null; then
-        notify-send "Server Backup Sync" "$message"
+    
+    # Check if notify-send is available
+    if ! command -v notify-send &> /dev/null; then
+        echo "[$(date)] WARNING: notify-send command not found" >&2
+        return 0
+    fi
+    
+    # Check if DISPLAY is set
+    if [[ -z "${DISPLAY:-}" ]]; then
+        echo "[$(date)] WARNING: DISPLAY not set, skipping notification" >&2
+        return 0
+    fi
+    
+    # Try to send notification, log any errors
+    if ! notify-send "Server Backup Sync" "$message" 2>&1; then
+        echo "[$(date)] WARNING: Failed to send notification: $message" >&2
     fi
 }
 
