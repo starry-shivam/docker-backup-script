@@ -4,6 +4,14 @@ set -Eeuo pipefail
 REMOTE="starrygd:backups"
 DEST="$HOME/Documents/Important-Stuffs/server-bak"
 
+# Function to send desktop notification
+notify_desktop() {
+    local message="$1"
+    if command -v notify-send &> /dev/null; then
+        notify-send "Server Backup Sync" "$message"
+    fi
+}
+
 mkdir -p "$DEST"
 cd "$DEST"
 
@@ -31,6 +39,7 @@ if [[ -f "$latest" && -f "$latest_sha" ]]; then
 
     if sha256sum -c "$latest_sha" >/dev/null 2>&1; then
         echo "Local copy already verified."
+        notify_desktop "Download skipped - latest backup already exists and is verified"
 
         find . -maxdepth 1 -type f -name 'docker-apps-*.tar.zst' \
             ! -name "$latest" -delete
@@ -50,6 +59,7 @@ tmp_sha="${latest_sha}.tmp"
 rm -f "$tmp_backup" "$tmp_sha"
 
 echo "Downloading backup..."
+notify_desktop "Updating latest file from remote server..."
 rclone copyto \
     "$REMOTE/$latest" \
     "$tmp_backup"
@@ -77,3 +87,4 @@ find . -maxdepth 1 -type f -name 'docker-apps-*.tar.zst.sha256' \
     ! -name "$latest_sha" -delete
 
 echo "Backup sync complete."
+notify_desktop "Updated local backup copy with latest archive"
