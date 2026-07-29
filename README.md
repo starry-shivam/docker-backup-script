@@ -2,6 +2,8 @@
 
 Backup and restore scripts for Docker app folders with integrity checks, remote rotation, and restore validation.
 
+**[ Intended for my personal use only. No issues or PRs are accepted. ]**
+
 ## Directory structure example:
 
 ```text
