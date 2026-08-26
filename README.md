@@ -26,7 +26,7 @@ Backup and restore scripts for Docker app folders with integrity checks, remote 
 - **Cloud-Optimized Uploads:** Leverages `rclone` with tunable buffer and chunk sizes for fast, reliable transfers to any supported remote storage.
 - **Automated Remote Retention:** Automatically prunes the oldest archives and checksums from the cloud to strictly enforce your maximum backup limit.
 - **Concurrency Guards:** Uses strict error handling (`set -uo pipefail`) and atomic lockfiles to prevent overlapping backups or silent failures.
-- **Rich Telegram Alerts:** Sends real-time notifications for backup milestones, final size/integrity summaries, and detailed error reports.
+- **Rich Notifications:** Sends real-time alerts for backup milestones, final size/integrity summaries, and detailed error reports via Telegram or ntfy.sh (select with `NOTIFY_HANDLER`).
 
 ## Restore Features
 
@@ -47,7 +47,7 @@ Backup and restore scripts for Docker app folders with integrity checks, remote 
 - `docker compose`
 - `rclone`
 - `zstd`
-- Optional: Telegram bot token and chat ID for notifications
+- Optional: `NOTIFY_HANDLER=telegram` with bot token and chat ID, or `NOTIFY_HANDLER=ntfy` with an ntfy topic, for notifications
 
 ### Restore
 

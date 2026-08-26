@@ -28,6 +28,9 @@ readonly RCLONE_STATS_INTERVAL="${RCLONE_STATS_INTERVAL:-10s}"
 readonly RCLONE_DRIVE_CHUNK_SIZE="${RCLONE_DRIVE_CHUNK_SIZE:-64M}"
 readonly RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-32M}"
 
+# Notification handler: telegram, ntfy, or empty to disable notifications
+readonly NOTIFY_HANDLER="${NOTIFY_HANDLER:-}"
+
 # Telegram bot credentials for notifications
 readonly BOT_TOKEN="${BOT_TOKEN:-}"
 readonly CHAT_ID="${CHAT_ID:-}"
@@ -35,6 +38,13 @@ readonly CHAT_ID="${CHAT_ID:-}"
 readonly TELEGRAM_PROXY="${TELEGRAM_PROXY:-}"
 # Optional base URL for Telegram Bot API requests
 readonly TELEGRAM_API_BASE_URL="${TELEGRAM_API_BASE_URL:-https://api.telegram.org}"
+
+# ntfy.sh topic and server for notifications
+readonly NTFY_TOPIC="${NTFY_TOPIC:-}"
+# Optional base URL for a self-hosted ntfy server
+readonly NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
+# Optional ntfy access token (for protected topics)
+readonly NTFY_TOKEN="${NTFY_TOKEN:-}"
 
 # Timestamp for backup filenames (ISO 8601, filesystem-safe)
 readonly TIMESTAMP=$(date +"%Y-%m-%dT%H%M%S")
@@ -160,6 +170,47 @@ send_telegram() {
         >/dev/null 2>&1 || true
 }
 
+# ntfy.sh helper (no-op when topic is not set)
+# Usage: send_ntfy <message> [priority] [tags]
+send_ntfy() {
+    local msg="$1"
+    local priority="${2:-default}"
+    local tags="${3:-docker-backup}"
+
+    [[ -z "${NTFY_TOPIC:-}" ]] && return 0
+
+    local auth_args=()
+    [[ -n "${NTFY_TOKEN:-}" ]] && auth_args=(-H "Authorization: Bearer $NTFY_TOKEN")
+
+    curl -s \
+        --connect-timeout 10 \
+        --max-time 10 \
+        --retry 3 \
+        --retry-all-errors \
+        "${auth_args[@]}" \
+        -H "Title: Docker Backup" \
+        -H "Priority: $priority" \
+        -H "Tags: $tags" \
+        -X POST \
+        -d "$msg" \
+        "${NTFY_SERVER%/}/$NTFY_TOPIC" \
+        >/dev/null 2>&1 || true
+}
+
+# Dispatches to the configured notification handler (no-op when unset).
+# Usage: send_notification <message> [ntfy-priority] [ntfy-tags]
+send_notification() {
+    local msg="$1"
+    local priority="${2:-default}"
+    local tags="${3:-docker-backup}"
+
+    case "$NOTIFY_HANDLER" in
+        telegram) send_telegram "$msg" ;;
+        ntfy) send_ntfy "$msg" "$priority" "$tags" ;;
+        *) return 0 ;;
+    esac
+}
+
 # Timestamped log helper for journal visibility.
 log() {
     echo "[$(date '+%F %T')] $*"
@@ -181,7 +232,7 @@ fail() {
 📅 $(date +"%Y-%m-%d %H:%M:%S")
 Error: $1"
 
-    send_telegram "$MESSAGE"
+    send_notification "$MESSAGE" high "docker-backup,rotating_light"
 
     exit 1
 }
@@ -435,14 +486,35 @@ preflight_checks() {
         exit 1
     fi
 
+    # Validate notification handler config, if one is selected
+    case "$NOTIFY_HANDLER" in
+        telegram)
+            if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+                echo "ERROR: NOTIFY_HANDLER=telegram requires BOT_TOKEN and CHAT_ID to be set." >&2
+                exit 1
+            fi
+            ;;
+        ntfy)
+            if [[ -z "$NTFY_TOPIC" ]]; then
+                echo "ERROR: NOTIFY_HANDLER=ntfy requires NTFY_TOPIC to be set." >&2
+                exit 1
+            fi
+            ;;
+        "") ;;
+        *)
+            echo "ERROR: NOTIFY_HANDLER must be 'telegram', 'ntfy', or empty." >&2
+            exit 1
+            ;;
+    esac
+
     check_rclone_destination
 }
 
 send_start_notification() {
     local msg="🐋 Docker Apps Backup Started
 📅 $(date +"%Y-%m-%d %H:%M:%S")"
-    send_telegram "$msg"
-    log "Sent Telegram start notification"
+    send_notification "$msg" default "docker-backup,arrow_forward"
+    log "Sent start notification"
 }
 
 perform_backup() {
@@ -453,9 +525,9 @@ perform_backup() {
     stop_running_stacks
 
     if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
-        send_telegram "🛑 Containers stopped for backup
-📅 $(date +"%Y-%m-%d %H:%M:%S")"
-        log "Sent Telegram containers-stopped notification"
+        send_notification "🛑 Containers stopped for backup
+📅 $(date +"%Y-%m-%d %H:%M:%S")" default "docker-backup,octagonal_sign"
+        log "Sent containers-stopped notification"
     fi
 
     # --- Create archive using zstd compression ---
@@ -478,9 +550,9 @@ perform_backup() {
     restart_stacks
 
     if (( ${#PROJECTS_TO_RESTART[@]} > 0 )); then
-        send_telegram "✅ Containers back up after backup
-📅 $(date +"%Y-%m-%d %H:%M:%S")"
-        log "Sent Telegram containers-restarted notification"
+        send_notification "✅ Containers back up after backup
+📅 $(date +"%Y-%m-%d %H:%M:%S")" default "docker-backup,white_check_mark"
+        log "Sent containers-restarted notification"
     fi
 
     # Clear restart list since stacks are already running.
@@ -536,8 +608,8 @@ send_success_notification() {
 ☁️ Upload: rclone copy + check OK
 🗂 Retention: Keeping last $MAX_KEEP backups on remote"
 
-    send_telegram "$msg"
-    log "Sent Telegram success notification"
+    send_notification "$msg" default "docker-backup,white_check_mark"
+    log "Sent success notification"
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────── #
