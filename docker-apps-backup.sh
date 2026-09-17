@@ -11,8 +11,6 @@
 #
 # 0. You just DO WHAT THE FUCK YOU WANT TO.
 
-
-
 # ========================================= CONFIG START ========================================= #
 readonly SOURCE="${SOURCE:?SOURCE must be set}"
 # Local staging directory for backup creation and verification
@@ -76,6 +74,16 @@ if [[ -n "$NO_AUTOSTART_PROJECTS_RAW" ]]; then
 fi
 readonly NO_AUTOSTART_PROJECTS
 
+# Paths to exclude from the archive (comma-separated).
+# Accepts absolute paths under SOURCE, or paths relative to SOURCE.
+# Example env value: BACKUP_EXCLUDE=navidrome/data/artwork,navidrome/data/cache
+readonly BACKUP_EXCLUDE_RAW="${BACKUP_EXCLUDE:-}"
+BACKUP_EXCLUDE=()
+if [[ -n "$BACKUP_EXCLUDE_RAW" ]]; then
+    IFS=',' read -r -a BACKUP_EXCLUDE <<< "$BACKUP_EXCLUDE_RAW"
+fi
+readonly BACKUP_EXCLUDE
+
 # Directory names that indicate a project contains mutable/persistent state.
 # Projects containing any of these subdirectories will be stopped before backup.
 readonly STATE_DIRS=(
@@ -137,6 +145,28 @@ project_needs_shutdown() {
 
     # No persistent state indicators found
     return 1
+}
+
+# Build tar --exclude args from BACKUP_EXCLUDE, normalizing entries to paths
+# relative to the archived root (basename of SOURCE), since tar excludes
+# match against member names as stored in the archive.
+build_tar_exclude_args() {
+    TAR_EXCLUDE_ARGS=()
+    local base entry rel
+    base="$(basename "$SOURCE")"
+
+    for entry in "${BACKUP_EXCLUDE[@]}"; do
+        entry="${entry#"${entry%%[![:space:]]*}"}"
+        entry="${entry%"${entry##*[![:space:]]}"}"
+        [[ -z "$entry" ]] && continue
+
+        rel="$entry"
+        # Strip a leading SOURCE/ prefix if an absolute path was given
+        [[ "$rel" == "$SOURCE"/* ]] && rel="${rel#"$SOURCE"/}"
+        rel="${rel#/}"
+
+        TAR_EXCLUDE_ARGS+=(--exclude="$base/$rel")
+    done
 }
 
 # Best-effort restart of previously running projects (used on failure too)
@@ -532,7 +562,9 @@ perform_backup() {
 
     # --- Create archive using zstd compression ---
     log "Creating archive: $BACKUP_FILE"
+    build_tar_exclude_args
     tar -I "$ZSTD_CMD" -cf "$BACKUP_FILE" \
+        "${TAR_EXCLUDE_ARGS[@]}" \
         -C "$(dirname "$SOURCE")" "$(basename "$SOURCE")" \
         || fail "tar/zstd compression error"
     log "Archive created successfully"
